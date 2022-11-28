@@ -116,12 +116,4 @@
     io:format(lists:foldl(fun({Pattern, Replacement}, Data) ->
         re:replace(Data, Pattern, Replacement, [{return, list}, global])
                           end,
-        % if the formatting string starts with :, print the output on the same line as the function stamp
-        case Format of
-            [$, | _] -> tl(Format);
-            [$: | _] -> "%d %d$d%dg$d%db %dc " ++ tl(Format);
-            _ -> Format
-        end,
-        ?_print_colors),
-        case Format of
-            [$, | _] -> tl(tl(tl(tl(tl(tl(tl(Args))))))); _ -> Args end)).
+        Format, ?_print_colors), Args )).

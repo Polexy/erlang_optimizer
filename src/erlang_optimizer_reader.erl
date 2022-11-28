@@ -7,7 +7,8 @@
 -record(state, {filename            :: string(),
                 line_number = 1     :: integer(),
                 calculation         :: map(),
-                debug = true        :: boolean()
+                debug = true        :: boolean(),
+                function = undefined :: string() | undefined
                 }
         ).
 
@@ -35,9 +36,18 @@ read_file(File) ->
 read_all_lines(State = #state{line_number = LN}, IO) ->
     case file:read_line(IO) of
         eof  -> ok;
-        {ok, Data} ->
-            analyze(State, Data),
-            read_all_lines(State#state{line_number = LN + 1}, IO);
+        {ok, Line} ->
+            %% ignore comments and empty line
+            NewState =
+                case pre_process_line(Line) of
+                    skip ->
+                        State;
+                    NewLine ->
+                        State1 = check_fun(State, NewLine),
+                        analyze(State1, NewLine),
+                        State1
+                end,
+            read_all_lines(NewState#state{line_number = LN + 1}, IO);
         Error ->
             Error
     end.
@@ -53,35 +63,61 @@ read_all_erl_files(Dir, [File | Tail]) ->
             read_all_erl_files(Dir, Tail)
     end.
 
+-spec analyze(#state{}, string()) -> ok.
+analyze(State, Line) ->
+    analyze_maps(State, Line).
 
-analyze(#state{filename = FN, line_number = LN, calculation = Calculation}, DataA) ->
-    %% maps:get optimization
-    case re:run(DataA,"maps:get\\((.*)\\)", []) of
-        {match,[{Start, Length}, {StartG1, LengthG1}]} ->
-            MapFunc = string:substr(DataA, Start + 1, Length),
-            MapArgsStr = string:substr(DataA, StartG1 + 1, LengthG1),
-            MapArgs = string:tokens(MapArgsStr, ","),
-            Format = "~s:~p %y~n~s~n",
-            case MapArgs of
-                [Key, Map] ->
-                    Name = map_match_vs_get_2,
-                    #{Name := {_, Val}} = Calculation,
-                    ?print(Format, [FN, LN, MapFunc, help(Name)]),
-                    ?print("Using \"#{~s := Val} = ~s\" may decrease cpu usage for that call on %g ~n~n",
-                        [Key, Map, Val]);
-                [Key, Map, _Default] ->
-                    Name = get_2_vs_get_3,
-                    ?print(Format, [FN, LN, MapFunc, help(Name)]),
-                    #{Name := {_, Val}} = Calculation,
-                    ?print("Using \"maps:get(~s, ~s)\" may decrease cpu usage for that call on %g ~n~n",
-                        [Key, Map, Val]);
-                _ ->
-                    ok
-            end;
+
+analyze_maps(State, Line) ->
+    case re:run(Line,"maps:get\\((.*)\\)", [ungreedy, global]) of
+        {match, MatchResult} ->
+            match_all(State, Line, MatchResult);
         _ ->
             ok
     end.
 
+match_all(_State, _StrData, []) ->
+    ok;
+match_all(#state{filename = FN, line_number = LN, calculation = Calculation, function = Func} = State, StrData, [[{Start, Length}, {StartG1, LengthG1}] | Rest]) ->
+    MapFunc = string:substr(StrData, Start + 1, Length),
+    MapArgsStr = string:substr(StrData, StartG1 + 1, LengthG1),
+    MapArgs = string:tokens(MapArgsStr, ","),
+    Format = "~s:~p in function: %e - %y~n~s~n",
+    case MapArgs of
+        [Key, Map] ->
+            Name = map_match_vs_get_2,
+            #{Name := {_, Val}} = Calculation,
+            ?print(Format, [FN, LN, Func, MapFunc, help(Name)]),
+            ?print("Using \"#{~s := Val} = ~s\" may decrease cpu usage for that call on %g ~n~n",
+                [Key, Map, Val]);
+        [Key, Map, _Default] ->
+            Name = get_2_vs_get_3,
+            ?print(Format, [FN, LN, Func, MapFunc, help(Name)]),
+            #{Name := {_, Val}} = Calculation,
+            ?print("Using \"maps:get(~s, ~s)\" may decrease cpu usage for that call on %g ~n~n",
+                [Key, Map, Val]);
+        _ ->
+            ok
+    end,
+    match_all(State, StrData, Rest).
+
+
+pre_process_line(Data) ->
+    [NewLine | _] = string:split(Data, "%%"),
+    case re:run(NewLine,"\\S") of
+        {match, _} ->
+            NewLine;
+        _ ->
+            skip
+    end.
+
+check_fun(State, Line) ->
+    case re:run(Line,"^\\w.*\\(.*\\)", [ungreedy]) of
+        {match, [{Start, Length}]} ->
+            State#state{function = string:substr(Line, Start + 1, Length)};
+        _ ->
+            State
+    end.
 
 help(map_match_vs_get_2) ->
     "    If the map is small and the keys are constants known at compile-time,
@@ -89,6 +125,4 @@ help(map_match_vs_get_2) ->
 help(get_2_vs_get_3) ->
     "    A call maps:get/3 is more expensive than a call to maps:get/2.
     If a small map is used as alternative to using a record, instead of calling maps:get/3
-    multiple times to handle default values, consider putting the default values in a map and merging that map with the other map";
-help(_) ->
-    "".
+    multiple times to handle default values, consider putting the default values in a map and merging that map with the other map".
