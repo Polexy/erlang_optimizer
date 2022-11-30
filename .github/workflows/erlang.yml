@@ -1,0 +1,24 @@
+name: Erlang CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    container:
+      image: erlang:25.1.1
+
+    steps:
+    - uses: actions/checkout@v3
+    - run: ./support/rebar3 eunit
+    - run: ./support/rebar3 dialyzer
